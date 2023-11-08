@@ -1,5 +1,6 @@
 import { useCallback, useEffect,  useState } from 'react';
 
+
 const useKeyDown = () => {
     const [paragraphContent, setParagraphContent] = useState('');
 
@@ -9,10 +10,14 @@ const useKeyDown = () => {
             setParagraphContent((prevContent) => prevContent.slice(0, -1));
         } else if (key === ' ') {
             setParagraphContent((prevContent) => prevContent + ' ');
-        } else {
+        } else if (/^[A-Za-z]$/.test(key)) {
+            
             setParagraphContent((prevContent) => prevContent + key);
+        }else if (key === '-') {
+            setParagraphContent((prevContent) => prevContent + '-');
+        }else{
+            return;
         }
-
 
     }
 
