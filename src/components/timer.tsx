@@ -60,7 +60,7 @@ const Timer :  FC<TimeProps>  = ({startTime,endFunction,timeInSeconds, end, endT
     },[counterInsecond]);
 
   return (
-    <div>
+    <div className='px-11 pt-11 textColor'>
         {timeFormat}
     </div>
   )

@@ -25,12 +25,12 @@ const Result: FC<resultProps> = ({correctChars, wrongChars,correctWords,wrongWor
 
       const calculateAccuracy = () => {
         const accuracy = (correctChars / (correctChars+wrongChars)) * 100;
-        return accuracy.toFixed(2); 
+        return accuracy.toFixed(1); 
       };
 
       const calculateErrorRate = () => {
         const errorRate = (((correctChars+wrongChars) - correctChars) / (correctChars+wrongChars)) * 100;
-        return errorRate.toFixed(2); 
+        return errorRate.toFixed(1); 
       };
       
       

@@ -1,13 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { FC, useEffect, useState } from 'react';
 import { faker } from '@faker-js/faker';
 import useKeyDown from '../hooks/useKeyDown';
 import Result from './result';
 import Timer from './timer';
 import ResultPopUp from './popUp';
 import Header from './header';
+import { doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { db } from '../config/firebase.config';
+import { Room } from '../room/room';
+import { useParams } from 'react-router-dom';
 
 
-const Paragraph = () => {
+
+const MultiplayerParagraph = () => {
   const { paragraphContent,resetParagraphContent, setIsKeyboardEnabled } = useKeyDown();
   const [words, setWords] = useState('');
   const [userInput, setUserInput] = useState('');
@@ -21,6 +26,7 @@ const Paragraph = () => {
   const [end,setEnd]=useState(false);
 
   const [timeInSeconds,setTimeInSeconds]=useState(15);
+  const {roomId} =useParams();
 
   const [openModal, setOpenModal] = useState(false);
   const onClose = () => {
@@ -40,19 +46,44 @@ const Paragraph = () => {
 
   const numberOfWord = 50;
 
-  useEffect(() => {
-    setWords(generateWords(numberOfWord));
-  }, []);
+//   useEffect(() => {
+//     setWords(paragraph);
+//   }, []);
 
-  const refresh = (numberOfWord: number) => {
-    setWords(generateWords(numberOfWord));
-    setUserInput('');
-    resetParagraphContent();
-    setStartTime(false);
-    setEndTime(false);
-    setEnd(true);
+
+  const refresh = async (numberOfWord: number, roomId: string, timeInSeconds: number) => {
+    const roomRef = doc(db, 'rooms', roomId);
+    try{
+        await updateDoc(roomRef, { gameStarted: true , paragraph: generateWords(numberOfWord), timeInSeconds: timeInSeconds });
+        const unsubscribe = onSnapshot(roomRef, (docSnapshot) => {
+            if (docSnapshot.exists()) {
+              const roomData = docSnapshot.data() as Room;
+              if (roomData){
+                setWords(roomData.paragraph)
+                setTimeInSeconds(roomData.timeInSeconds)
+                
+                } 
+            }
+        });
+        setUserInput('');
+        resetParagraphContent();
+        setStartTime(false);
+        setEndTime(false);
+        setEnd(true);
+    
+    return () => unsubscribe();
+        
+    } catch (err) {
+        console.log(err)
+    }
+
+   
 
   };
+
+//   useEffect (() => {
+//     setTimeInSeconds(selectedSecond);
+//   },[selectedSecond]);
 
   const generateWords = (numberOfWord: number) => {
     return faker.word.words(numberOfWord);
@@ -108,9 +139,7 @@ const Paragraph = () => {
   }, [userInput]);
  
 
-  const changeTime = (time: number) =>{
-    setTimeInSeconds(time);
-  }
+  
 
   const checkCorrectWords = () => {
     const inputWords = userInput.split(' ');
@@ -159,36 +188,33 @@ const Paragraph = () => {
   }
 
  
+  useEffect( () => {
+    if (!roomId) {
+        console.log("Room ID is undefined");
+        return;
+      }
+
+    const roomRef = doc(db, 'rooms', roomId);
+
+    
+        const unsubscribe = onSnapshot(roomRef, (docSnapshot) => {
+            if (docSnapshot.exists()) {
+              const roomData = docSnapshot.data() as Room;
+              if (roomData){
+                setWords(roomData.paragraph)
+                setTimeInSeconds(roomData.timeInSeconds)
+        
+                } 
+            }
+        });
+    
+    return () => unsubscribe();
+  },[roomId])
  
   return (
     <>
     <div className=' text-2xl p-11 '>
-        <div className='flex items-center justify-center gap-3 rounded-lg '> 
-            <button style={
-                {
-                    color: timeInSeconds === 15 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back' type="button" onClick={() =>{
-                changeTime(15)
-                refresh(numberOfWord)
-                }}>15s</button>
-            <button style={
-                {
-                    color: timeInSeconds === 30 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back' type="button" onClick={() =>{
-                changeTime(30)
-                refresh(numberOfWord)
-                }}>30s</button>
-            <button style={
-                {
-                    color: timeInSeconds === 60 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back ' type="button" onClick={() =>{
-                changeTime(60)
-                refresh(numberOfWord)
-                }}>60s</button>
-        </div>
+        
       
       <Timer startTime={startTime} endFunction={endFunction} 
       timeInSeconds={timeInSeconds} end={end} endTimer={endTimer}  />
@@ -196,7 +222,7 @@ const Paragraph = () => {
       <p className='px-11 text-justify word-spacing-10 tracking-wider'>{coloredText(words)}</p>
       <br />
       <div className="flex justify-center items-center pt-5">
-        <button type="button"  className='cursor-pointer rounded-md p-3 font-nunito text-xl back   ' onClick={() => refresh(numberOfWord)}>
+        <button type="button"  className='cursor-pointer rounded-md p-3 font-nunito text-xl back   ' onClick={() => refresh(numberOfWord, roomId!, timeInSeconds)}>
             Refresh
         </button>
       </div>
@@ -217,6 +243,6 @@ const Paragraph = () => {
   );
 };
 
-export default Paragraph;
+export default MultiplayerParagraph;
 
 

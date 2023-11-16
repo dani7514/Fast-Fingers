@@ -1,13 +1,78 @@
-body {
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+* {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  padding: 0;
+  box-sizing: border-box;
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+body {
+  min-height: 100vh;
+  background-color: #003950;
 }
+
+.back{
+  background-color: #014961;
+  color: #6DEAFF;
+}
+
+.textColor {
+  color: #FFCEFB;
+}
+
+@layer base {
+  :root {
+    --color-text-base: 255, 206, 251;
+    --color-text-muted: 219, 224, 210;
+    --color-text-inverted: 31, 78, 67;
+    --color-text-muted-button: 255, 255, 255;
+    --color-button-base: 31, 78, 67;
+    --color-button-muted: 219, 224, 210;
+  }
+}
+
+body {
+  color: rgb(var(--color-text-base));
+  font-family: "Roboto Mono", monospace;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+
+
+
+
+
+
+@keyframes win {
+  0% {
+    scale: 1.125;
+  }
+  25% {
+    scale: 1;
+  }
+  50% {
+    scale: 1.125;
+  }
+  75% {
+    scale: 1;
+  }
+  100% {
+    scale: 1.15;
+  }
+}
+
+.colour{
+  color: #6DEAFF;
+}
+
+
+
+
