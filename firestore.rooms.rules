@@ -61,16 +61,29 @@ service cloud.firestore {
 
       function isPlayerAt(room, index) {
         return index is int && index >= 0 && index < room.players.size()
-          && room.players[index].uid == request.auth.uid;
+          && room.players[index].uid == request.auth.uid
+          && (!('activePlayerUids' in room) || request.auth.uid in room.activePlayerUids);
+      }
+
+      function validRematchPlayers(previous, next, linkedRoom) {
+        return 'activePlayerUids' in next
+          ? linkedRoom.nextPlayerUids == next.activePlayerUids
+            && next.activePlayerUids is list && request.auth.uid in next.activePlayerUids
+            && next.activePlayerUids.size() >= 2 && next.activePlayerUids.size() <= previous.players.size()
+            && next.activePlayerUids.toSet().size() == next.activePlayerUids.size()
+            && (!('activePlayerUids' in previous) || previous.activePlayerUids.hasAll(next.activePlayerUids))
+          : !('activePlayerUids' in previous) && !('nextPlayerUids' in linkedRoom);
       }
 
       function creatingRematch(next) {
         let previous = get(roomPath(next.previousRoomId)).data;
+        let linkedRoom = getAfter(roomPath(next.previousRoomId)).data;
         return next.keys().hasOnly(['creator', 'players', 'paragraph', 'timeInSeconds', 'gameStarted',
-            'startedAt', 'progress', 'previousRoomId', 'rematchPlayerIndex'])
+            'startedAt', 'progress', 'previousRoomId', 'rematchPlayerIndex', 'activePlayerUids'])
           && previous.get('nextRoomId', '') == ''
-          && getAfter(roomPath(next.previousRoomId)).data.nextRoomId == roomId
+          && linkedRoom.nextRoomId == roomId
           && isPlayerAt(previous, next.rematchPlayerIndex)
+          && validRematchPlayers(previous, next, linkedRoom)
           && previous.startedAt is timestamp
           && request.time >= previous.startedAt + duration.value(previous.timeInSeconds + 3, 's')
           && next.creator == previous.creator && next.players == previous.players
@@ -82,7 +95,7 @@ service cloud.firestore {
 
       function linkingRematch(before, after) {
         return before.get('nextRoomId', '') == ''
-          && after.diff(before).affectedKeys().hasOnly(['nextRoomId'])
+          && after.diff(before).affectedKeys().hasOnly(['nextRoomId', 'nextPlayerUids'])
           && after.nextRoomId is string
           && !exists(roomPath(after.nextRoomId))
           && getAfter(roomPath(after.nextRoomId)).data.previousRoomId == roomId;
@@ -114,6 +127,22 @@ service cloud.firestore {
           || starting(resource.data, request.resource.data)
           || ('progress' in resource.data && typingRematch(resource.data, request.resource.data))
           || typing(resource.data, request.resource.data));
+
+      match /presence/{sessionId} {
+        function validPresence() {
+          let heartbeat = request.resource.data;
+          let room = get(roomPath(roomId)).data;
+          return heartbeat.keys().hasOnly(['uid', 'playerIndex', 'lastSeenAt'])
+            && heartbeat.uid == request.auth.uid
+            && heartbeat.lastSeenAt == request.time
+            && isPlayerAt(room, heartbeat.playerIndex);
+        }
+
+        allow list: if signedIn();
+        allow create: if signedIn() && validPresence();
+        allow update: if signedIn() && resource.data.uid == request.auth.uid && validPresence();
+        allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+      }
     }
   }
 }

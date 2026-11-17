@@ -1,9 +1,11 @@
 import { faker } from '@faker-js/faker';
 import { User } from 'firebase/auth';
-import { addDoc, collection, doc, onSnapshot, runTransaction, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, getDocsFromServer, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../config/firebase.config';
 
 const countdownSeconds = 3;
+const presenceIntervalMs = 5000;
+const presenceExpiryMs = 20000;
 export const roundDurations = [15, 30, 60];
 
 interface Progress {
@@ -25,11 +27,62 @@ export interface Room {
   startedAt?: Timestamp | null;
   players: Player[];
   nextRoomId?: string;
+  nextPlayerUids?: string[];
+  activePlayerUids?: string[];
   progress?: Record<string, Progress & { playerIndex: number }>;
 }
 
 function roomRef(roomId: string) {
   return doc(db, 'rooms', roomId);
+}
+
+function presenceCollection(roomId: string) {
+  return collection(db, 'rooms', roomId, 'presence');
+}
+
+export function racePlayers(room: Room) {
+  return room.players.filter((player) => !room.activePlayerUids || room.activePlayerUids.includes(player.uid));
+}
+
+export function trackRacePresence(roomId: string, uid: string, playerIndex: number) {
+  const session = doc(presenceCollection(roomId));
+  let pending = false;
+  let closed = false;
+
+  async function heartbeat() {
+    if (pending || closed) return;
+    pending = true;
+    try {
+      await setDoc(session, { uid, playerIndex, lastSeenAt: serverTimestamp() });
+    } catch {
+      // The next heartbeat retries after a temporary failure.
+    } finally {
+      pending = false;
+    }
+  }
+
+  void heartbeat();
+  const interval = window.setInterval(heartbeat, presenceIntervalMs);
+  window.addEventListener('online', heartbeat);
+  document.addEventListener('visibilitychange', heartbeat);
+  window.addEventListener('pagehide', leavePage);
+
+  function leavePage(event: PageTransitionEvent) {
+    if (!event.persisted) stop();
+  }
+
+  function stop() {
+    if (closed) return;
+    closed = true;
+    window.clearInterval(interval);
+    window.removeEventListener('online', heartbeat);
+    document.removeEventListener('visibilitychange', heartbeat);
+    window.removeEventListener('pagehide', leavePage);
+    // A closed browser may not send this write. Old heartbeats expire on their own.
+    void deleteDoc(session).catch(() => undefined);
+  }
+
+  return stop;
 }
 
 function makePlayer(user: User): Player {
@@ -89,17 +142,30 @@ export async function joinRoom(roomId: string, user: User) {
 export async function startRematch(roomId: string, uid: string) {
   const reference = roomRef(roomId);
   const next = doc(collection(db, 'rooms'));
-  await runTransaction(db, async (transaction) => {
+  const presence = await getDocsFromServer(presenceCollection(roomId));
+  const cutoff = Date.now() - presenceExpiryMs;
+  const connected = new Set(presence.docs.flatMap((session) => {
+    const { uid, lastSeenAt } = session.data() as { uid: string; lastSeenAt: Timestamp | null };
+    return lastSeenAt && lastSeenAt.toMillis() >= cutoff ? [uid] : [];
+  }));
+
+  return runTransaction(db, async (transaction) => {
     const room = (await transaction.get(reference)).data() as Room | undefined;
     if (!room) throw new Error('This race is unavailable.');
     const playerIndex = room.players.findIndex((player) => player.uid === uid);
-    if (playerIndex < 0) throw new Error('You are not in this room.');
-    if (room.nextRoomId) return;
+    const players = racePlayers(room);
+    if (!players.some((player) => player.uid === uid)) throw new Error('You are not in this room.');
+    if (room.nextRoomId) return 'started';
 
     const startsAt = getRoundStart(room);
     if (startsAt === null || Date.now() < startsAt + room.timeInSeconds * 1000) {
       throw new Error('The race is still in progress.');
     }
+
+    const activePlayerUids = Array.from(new Set(players
+      .filter((player) => player.uid === uid || connected.has(player.uid))
+      .map((player) => player.uid)));
+    if (activePlayerUids.length < 2) return 'alone';
 
     transaction.set(next, {
       creator: room.creator,
@@ -109,10 +175,12 @@ export async function startRematch(roomId: string, uid: string) {
       gameStarted: true,
       startedAt: serverTimestamp(),
       progress: {},
+      activePlayerUids,
       previousRoomId: roomId,
       rematchPlayerIndex: playerIndex,
     });
-    transaction.update(reference, { nextRoomId: next.id });
+    transaction.update(reference, { nextRoomId: next.id, nextPlayerUids: activePlayerUids });
+    return 'started';
   });
 }
 
@@ -156,7 +224,7 @@ export async function saveProgress(roomId: string, uid: string, input: string) {
   await runTransaction(db, async (transaction) => {
     const room = (await transaction.get(reference)).data() as Room | undefined;
     if (!room || getRoundStart(room) === null) throw new Error('This race is unavailable.');
-    const player = room.players.find((entry) => entry.uid === uid);
+    const player = racePlayers(room).find((entry) => entry.uid === uid);
     if (!player) throw new Error('You are not in this room.');
     if (typedInRoom(room, player) === input) return;
 

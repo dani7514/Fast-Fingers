@@ -11,7 +11,9 @@ jest.mock('./config/firebase.config', () => ({ db: {} }));
 const mockBeforeAddDoc = jest.fn();
 jest.mock('firebase/firestore', () => {
   const rooms = new Map<string, Record<string, unknown>>();
+  const presence = new Map<string, Record<string, unknown>>();
   let nextId = 0;
+  let createdRooms = 0;
   const snapshot = (id: string) => {
     const room = rooms.get(id);
     return { exists: () => !!room, data: () => room };
@@ -22,13 +24,27 @@ jest.mock('firebase/firestore', () => {
     listeners.get(id)?.forEach((listener) => listener(snapshot(id)));
   };
   return {
-    collection: jest.fn(),
-    doc: (_database: unknown, _collection?: string, id?: string) => ({ id: id ?? 'rematch-' + ++nextId }),
+    collection: (_database: unknown, ...segments: string[]) => segments.join('/'),
+    doc: (collection: unknown, _name?: string, id?: string) => ({
+      id: id ?? 'rematch-' + ++nextId, collection,
+    }),
     addDoc: async (_collection: unknown, data: Record<string, unknown>) => {
       await mockBeforeAddDoc();
-      write('test-room', data);
-      return { id: 'test-room' };
+      const id = createdRooms++ === 0 ? 'test-room' : 'new-room-' + createdRooms;
+      write(id, data);
+      return { id };
     },
+    setDoc: async ({ collection, id }: { collection: string; id: string }, data: Record<string, unknown>) => {
+      presence.set(collection + '/' + id, data);
+    },
+    deleteDoc: async ({ collection, id }: { collection: string; id: string }) => {
+      presence.delete(collection + '/' + id);
+    },
+    getDocsFromServer: async (collection: string) => ({
+      docs: Array.from(presence.entries())
+        .filter(([path]) => path.startsWith(collection + '/'))
+        .map(([, data]) => ({ data: () => data })),
+    }),
     onSnapshot: ({ id }: { id: string }, listener: (mockValue: ReturnType<typeof snapshot>) => void) => {
       const subscribers = listeners.get(id) || new Set<typeof listener>();
       listeners.set(id, subscribers);
@@ -36,8 +52,8 @@ jest.mock('firebase/firestore', () => {
       listener(snapshot(id));
       return () => subscribers.delete(listener);
     },
-    runTransaction: async (database: unknown, callback: (mockTransaction: unknown) => Promise<void>) => {
-      await callback({
+    runTransaction: (database: unknown, callback: (mockTransaction: unknown) => Promise<unknown>) => {
+      return callback({
         get: async ({ id }: { id: string }) => snapshot(id),
         set: ({ id }: { id: string }, data: Record<string, unknown>) => write(id, data),
         update: ({ id }: { id: string }, data: Record<string, unknown>) => write(id, { ...rooms.get(id), ...data }),
@@ -172,5 +188,14 @@ test('one player can start a rematch for everyone in the race', async () => {
   expect(hostUI.getByText('5 correct of 5 typed')).toBeInTheDocument();
 
   hostView.unmount();
+  await act(async () => { jest.advanceTimersByTime(14250); });
+  await act(async () => { fireEvent.click(guestUI.getByRole('button', { name: 'Play again' })); });
+  expect(guestUI.getByRole('status')).toHaveTextContent('Your friends have left the room.');
+  expect(guestUI.getByRole('link', { name: 'Practice solo' })).toHaveAttribute('href', '/');
+  expect(guestUI.queryByRole('timer')).toBeNull();
+
+  await act(async () => { fireEvent.click(guestUI.getByRole('button', { name: 'Invite friends' })); });
+  expect(guestUI.getByRole('heading', { name: 'Waiting room' })).toBeInTheDocument();
+  expect(guestUI.getByRole('textbox', { name: 'Room ID' })).toHaveValue('new-room-2');
   guestView.unmount();
 });

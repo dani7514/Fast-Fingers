@@ -1,7 +1,7 @@
 import { User } from 'firebase/auth';
 import { useEffect, useId, useState } from 'react';
 import { Link, Navigate, useMatch, useParams } from 'react-router-dom';
-import { getRoundStart, racePassage, Room, roundDurations, startRoom, subscribeToRoom, typedInRoom } from '../room/room';
+import { getRoundStart, racePassage, racePlayers, Room, roundDurations, startRoom, subscribeToRoom, typedInRoom } from '../room/room';
 import MultiplayerParagraph from './multiplyPlayer';
 
 export default function RoomPage({ user }: { user: User }) {
@@ -23,13 +23,16 @@ function ConnectedRoom({ roomId, user }: { roomId: string; user: User }) {
   if (!room) return <p role="alert">Room not found. <Link className="underline" to="/join">Join another room</Link></p>;
 
   const joinUrl = '/join?room=' + encodeURIComponent(roomId);
-  const player = room.players.find((entry) => entry.uid === user.uid);
+  const player = racePlayers(room).find((entry) => entry.uid === user.uid);
+  if (!player && room.activePlayerUids) {
+    return <p>This rematch is already underway. <Link className="underline" to="/create">Create or join another room</Link></p>;
+  }
   if (!player) return <Link className="underline" to={joinUrl}>Join this room</Link>;
 
   const startsAt = getRoundStart(room);
   if (startsAt !== null) {
     if (!raceRoute) return <Navigate replace to={'/multiplayer/' + encodeURIComponent(roomId)} />;
-    return <MultiplayerParagraph roomId={roomId} room={room} uid={user.uid}
+    return <MultiplayerParagraph roomId={roomId} room={room} user={user}
       startsAt={startsAt} savedInput={typedInRoom(room, player)} />;
   }
 

@@ -1,30 +1,39 @@
 import { useEffect, useRef, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
-import { Navigate } from 'react-router-dom';
-import { Room, saveProgress, scoreTyping, startRematch, typedInRoom } from '../room/room';
+import { User } from 'firebase/auth';
+import { Link, Navigate, useNavigate } from 'react-router-dom';
+import { createRoom, racePlayers, Room, saveProgress, scoreTyping, startRematch, trackRacePresence, typedInRoom } from '../room/room';
 import TypingField from './typingField';
 
 interface RaceProps {
   roomId: string;
   room: Room;
-  uid: string;
+  user: User;
   startsAt: number;
   savedInput: string;
 }
 
-export default function MultiplayerParagraph({ roomId, room, uid, startsAt, savedInput }: RaceProps) {
+export default function MultiplayerParagraph({ roomId, room, user, startsAt, savedInput }: RaceProps) {
+  const { uid } = user;
+  const navigate = useNavigate();
   const [input, setInput] = useState(savedInput);
   const [now, setNow] = useState(Date.now);
   const [saveError, setSaveError] = useState(false);
   const [confirmedInput, setConfirmedInput] = useState(savedInput);
   const [openingRematch, setOpeningRematch] = useState(false);
   const [rematchError, setRematchError] = useState('');
+  const [friendsLeft, setFriendsLeft] = useState(false);
+  const [inviting, setInviting] = useState(false);
   const latestInput = useRef(savedInput);
   const syncedInput = useRef(savedInput);
   const pendingSave = useRef<Promise<void>>();
   const endsAt = startsAt + room.timeInSeconds * 1000;
   const finished = now >= endsAt;
   const racing = now >= startsAt && !finished;
+  const playerIndex = room.players.findIndex((player) => player.uid === uid);
+  const rematchRoomId = !room.nextPlayerUids || room.nextPlayerUids.includes(uid) ? room.nextRoomId : undefined;
+
+  useEffect(() => trackRacePresence(roomId, uid, playerIndex), [roomId, uid, playerIndex]);
 
   useEffect(() => {
     if (finished) return;
@@ -63,7 +72,7 @@ export default function MultiplayerParagraph({ roomId, room, uid, startsAt, save
     setOpeningRematch(true);
     setRematchError('');
     try {
-      await startRematch(roomId, uid);
+      setFriendsLeft(await startRematch(roomId, uid) === 'alone');
     } catch (error) {
       setRematchError(error instanceof FirebaseError && error.code === 'permission-denied'
         ? 'Firestore denied the rematch. Publish the updated room rules and try again.'
@@ -73,12 +82,24 @@ export default function MultiplayerParagraph({ roomId, room, uid, startsAt, save
     }
   }
 
-  if (room.nextRoomId && finished && (input === confirmedInput || saveError)) {
-    return <Navigate replace to={'/multiplayer/' + encodeURIComponent(room.nextRoomId)} />;
+  async function inviteFriends() {
+    setInviting(true);
+    setRematchError('');
+    try {
+      const newRoomId = await createRoom(user);
+      navigate('/waiting/' + encodeURIComponent(newRoomId));
+    } catch {
+      setRematchError('Unable to create a new room. Try again.');
+      setInviting(false);
+    }
+  }
+
+  if (rematchRoomId && finished && (input === confirmedInput || saveError)) {
+    return <Navigate replace to={'/multiplayer/' + encodeURIComponent(rematchRoomId)} />;
   }
 
   const remaining = Math.max(0, endsAt - now);
-  const leaderboard = room.players.map((player) => {
+  const leaderboard = racePlayers(room).map((player) => {
     const typed = player.uid === uid ? input : typedInRoom(room, player);
     return { player, ...scoreTyping(room.paragraph, typed, room.timeInSeconds), typed: typed.length };
   }).sort((a, b) => b.correct - a.correct || b.accuracy - a.accuracy);
@@ -136,13 +157,23 @@ export default function MultiplayerParagraph({ roomId, room, uid, startsAt, save
         </div>
         {finished && (
           <footer className="panel-footer">
-            {input === confirmedInput && (
+            {friendsLeft || (room.nextRoomId && !rematchRoomId) ? (
+              <div className="stack">
+                <p role="status">{friendsLeft ? 'Your friends have left the room.' : 'Your friends started a rematch.'}</p>
+                <div className="actions">
+                  <Link className="button" to="/">Practice solo</Link>
+                  <button className="button button-primary" type="button" disabled={inviting} onClick={inviteFriends}>
+                    {inviting ? 'Creating room…' : 'Invite friends'}
+                  </button>
+                </div>
+              </div>
+            ) : input === confirmedInput && (
               <button className="button button-primary" type="button" disabled={openingRematch} onClick={playAgain}>
                 {openingRematch ? 'Starting rematch…' : 'Play again'}
               </button>
             )}
             {input !== confirmedInput && !saveError && <p role="status" className="muted">Saving your result…</p>}
-            <span className="muted">Play again starts a rematch for everyone.</span>
+            {!friendsLeft && !room.nextRoomId && <span className="muted">Play again starts a rematch with players who are still here.</span>}
           </footer>
         )}
       </div>
