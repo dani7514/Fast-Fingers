@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /rooms/{roomId} {
+      function signedIn() {
+        return request.auth != null;
+      }
+
+      function newPlayer(player) {
+        return player.keys().hasOnly(['uid', 'displayName', 'photoUrl', 'lastTyped', 'Wpm'])
+          && player.uid == request.auth.uid
+          && player.displayName is string
+          && player.displayName.size() <= 256
+          && player.photoUrl is string
+          && player.photoUrl.size() <= 2048
+          && player.lastTyped == ''
+          && player.Wpm == 0;
+      }
+
+      function joining(before, after) {
+        let count = before.players.size();
+        return before.get('startedAt', null) == null
+          && after.diff(before).affectedKeys().hasOnly(['players'])
+          && after.players.size() == count + 1
+          && newPlayer(after.players[count])
+          && after.players == before.players.concat([after.players[count]]);
+      }
+
+      function starting(before, after) {
+        return before.creator.uid == request.auth.uid
+          && before.get('startedAt', null) == null
+          && before.players.size() >= 2
+          && after.diff(before).affectedKeys().hasOnly(['paragraph', 'timeInSeconds', 'gameStarted', 'startedAt'])
+          && after.paragraph is string
+          && after.paragraph.size() > 0
+          && after.paragraph.size() <= 4096
+          && after.timeInSeconds in [15, 30, 60]
+          && after.gameStarted == true
+          && after.startedAt == request.time;
+      }
+
+      function typing(before, after) {
+        let removed = before.players.removeAll(after.players);
+        let added = after.players.removeAll(before.players);
+        return before.get('startedAt', null) is timestamp
+          && !('progress' in before)
+          && after.diff(before).affectedKeys().hasOnly(['players'])
+          && before.players.size() == after.players.size()
+          && removed.size() == 1 && added.size() == 1
+          && before.players.removeAll(removed) == after.players.removeAll(added)
+          && removed[0].uid == request.auth.uid
+          && added[0].diff(removed[0]).affectedKeys().hasOnly(['lastTyped', 'Wpm'])
+          && added[0].lastTyped is string
+          && added[0].lastTyped.size() <= before.paragraph.size()
+          && added[0].Wpm is int && added[0].Wpm >= 0;
+      }
+
+      function roomPath(id) {
+        return /databases/$(database)/documents/rooms/$(id);
+      }
+
+      function isPlayerAt(room, index) {
+        return index is int && index >= 0 && index < room.players.size()
+          && room.players[index].uid == request.auth.uid;
+      }
+
+      function creatingRematch(next) {
+        let previous = get(roomPath(next.previousRoomId)).data;
+        return next.keys().hasOnly(['creator', 'players', 'paragraph', 'timeInSeconds', 'gameStarted',
+            'startedAt', 'progress', 'previousRoomId', 'rematchPlayerIndex'])
+          && previous.get('nextRoomId', '') == ''
+          && getAfter(roomPath(next.previousRoomId)).data.nextRoomId == roomId
+          && isPlayerAt(previous, next.rematchPlayerIndex)
+          && previous.startedAt is timestamp
+          && request.time >= previous.startedAt + duration.value(previous.timeInSeconds + 3, 's')
+          && next.creator == previous.creator && next.players == previous.players
+          && next.timeInSeconds == previous.timeInSeconds
+          && next.gameStarted == true && next.startedAt == request.time
+          && next.progress == {}
+          && next.paragraph is string && next.paragraph.size() > 0 && next.paragraph.size() <= 4096;
+      }
+
+      function linkingRematch(before, after) {
+        return before.get('nextRoomId', '') == ''
+          && after.diff(before).affectedKeys().hasOnly(['nextRoomId'])
+          && after.nextRoomId is string
+          && !exists(roomPath(after.nextRoomId))
+          && getAfter(roomPath(after.nextRoomId)).data.previousRoomId == roomId;
+      }
+
+      function typingRematch(before, after) {
+        let progress = after.progress[request.auth.uid];
+        return after.diff(before).affectedKeys().hasOnly(['progress'])
+          && after.progress.diff(before.progress).affectedKeys().hasOnly([request.auth.uid])
+          && progress.keys().hasOnly(['playerIndex', 'lastTyped', 'Wpm'])
+          && isPlayerAt(before, progress.playerIndex)
+          && progress.lastTyped is string && progress.lastTyped.size() <= before.paragraph.size()
+          && progress.Wpm is int && progress.Wpm >= 0;
+      }
+
+      allow get: if signedIn();
+      allow create: if signedIn() && 'previousRoomId' in request.resource.data
+        && creatingRematch(request.resource.data);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['creator', 'paragraph', 'timeInSeconds', 'gameStarted', 'players'])
+        && newPlayer(request.resource.data.creator)
+        && request.resource.data.players == [request.resource.data.creator]
+        && request.resource.data.paragraph == ''
+        && request.resource.data.timeInSeconds == 15
+        && request.resource.data.gameStarted == false;
+      allow update: if signedIn()
+        && (linkingRematch(resource.data, request.resource.data)
+          || joining(resource.data, request.resource.data)
+          || starting(resource.data, request.resource.data)
+          || ('progress' in resource.data && typingRematch(resource.data, request.resource.data))
+          || typing(resource.data, request.resource.data));
+    }
+  }
+}

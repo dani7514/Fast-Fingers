@@ -1,59 +1,50 @@
-
-import React, { FC, useState } from 'react';
+import { FormEvent, useState } from 'react';
+import { User } from 'firebase/auth';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { joinRoom } from '../room/room';
-import { User } from '@firebase/auth';
-import { useNavigate } from 'react-router-dom';
 
-interface RoomJoinProps {
-    user: User
-}
+export default function JoinRoom({ user }: { user: User }) {
+  const [searchParams] = useSearchParams();
+  const [roomIdInput, setRoomIdInput] = useState(searchParams.get('room') || '');
+  const [joining, setJoining] = useState(false);
+  const [error, setError] = useState('');
+  const navigate = useNavigate();
 
-const JoinRoom: FC<RoomJoinProps> = ({user}) => {
-  const [roomIdInput, setRoomIdInput] = useState('');
-  const navigate=useNavigate()
-
-  const handleJoinRoom = async () => {
+  async function handleJoinRoom(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const roomId = roomIdInput.trim();
+    setJoining(true);
+    setError('');
     try {
-        const player= {
-            uid: user.uid,
-            displayName: user.displayName || '',
-            photoUrl: user?.photoURL || '',
-            lastTyped: '',
-            Wpm: 0  
-        }
-
-      const roomData = await joinRoom(roomIdInput, player);
-
-      if (roomData) {
-        console.log('Joined room:', roomData);
-        navigate(`/waiting/${roomIdInput}`)
-      } else {
-        console.log('Room does not exist.');
-      }
-    } catch (error: any) {
-      console.error('Error joining room:', error.message);
+      await joinRoom(roomId, user);
+      navigate('/waiting/' + encodeURIComponent(roomId));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Unable to join this room.');
+    } finally {
+      setJoining(false);
     }
-  };
+  }
 
   return (
-    <div className=" pt-20 flex flex-col gap-2 items-center">
-      <input
-        type="text"
-        placeholder="Enter Room ID"
-        value={roomIdInput}
-        onChange={(e) => setRoomIdInput(e.target.value)}
-      />
-      {/* <br />
-      <input
-        type="text"
-        placeholder="Enter Your Name"
-        value={playerName}
-        onChange={(e) => setPlayerName(e.target.value)}
-      /> */}
-      <br />
-      <button onClick={handleJoinRoom}>Join Room</button>
-    </div>
+    <section className="narrow-page">
+      <div className="page-heading">
+        <h1>Join a room</h1>
+        <p>Enter the room ID from your host.</p>
+      </div>
+      <form className="panel" onSubmit={handleJoinRoom}>
+        <div className="panel-content stack">
+          <label className="field-label" htmlFor="room-id">Room ID</label>
+          <input id="room-id" className="field" value={roomIdInput} autoCapitalize="none" spellCheck={false}
+            onChange={(event) => setRoomIdInput(event.target.value)} required />
+          <div className="actions">
+            <button className="button button-primary" disabled={joining || !roomIdInput.trim()}>
+              {joining ? 'Joining…' : 'Join Room'}
+            </button>
+            <Link className="button" to="/create">Create a room</Link>
+          </div>
+          {error && <p role="alert" className="notice">{error}</p>}
+        </div>
+      </form>
+    </section>
   );
-};
-
-export default JoinRoom;
+}

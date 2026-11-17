@@ -1,222 +1,85 @@
-import React, { useEffect, useState } from 'react';
-import { faker } from '@faker-js/faker';
-import useKeyDown from '../hooks/useKeyDown';
-import Result from './result';
-import Timer from './timer';
-import ResultPopUp from './popUp';
-import Header from './header';
+import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { racePassage, roundDurations, scoreTyping } from '../room/room';
+import TypingField from './typingField';
 
+export default function Paragraph() {
+  const [duration, setDuration] = useState(roundDurations[0]);
+  const [passage, setPassage] = useState(() => racePassage(roundDurations[0]));
+  const [input, setInput] = useState('');
+  const [startsAt, setStartsAt] = useState<number | null>(null);
+  const [now, setNow] = useState(Date.now);
 
-const Paragraph = () => {
-  const { paragraphContent,resetParagraphContent, setIsKeyboardEnabled } = useKeyDown();
-  const [words, setWords] = useState('');
-  const [userInput, setUserInput] = useState('');
-  const [correctChar, setCorrectChar] = useState(0);
-  const [wrongChar, setWrongChar] = useState(0);
-  const [correctWords, setCorrectWords] = useState(0);
-  const [wrongWords, setWrongWords] = useState(0);
-
-  const [startTime,setStartTime]=useState(false);
-  const [endTime,setEndTime]=useState(false);
-  const [end,setEnd]=useState(false);
-
-  const [timeInSeconds,setTimeInSeconds]=useState(15);
-
-  const [openModal, setOpenModal] = useState(false);
-  const onClose = () => {
-    setOpenModal(false)
-    setIsKeyboardEnabled(true)
-    }
-
-//   const {setIsKeyboardEnabled}=useKeyDown()
+  const remaining = startsAt === null ? duration * 1000 : Math.max(0, startsAt + duration * 1000 - now);
+  const finished = remaining === 0;
+  const active = startsAt !== null && !finished;
+  const elapsed = startsAt === null ? 0 : Math.min(duration, (now - startsAt) / 1000);
+  const { accuracy, correct, wpm } = scoreTyping(passage, input, Math.max(1, elapsed));
 
   useEffect(() => {
-    if (endTime) {
-        setOpenModal(true);
-        setIsKeyboardEnabled(false);
-       
-      } 
-  }, [endTime]);
+    if (!active) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(interval);
+  }, [active]);
 
-  const numberOfWord = 50;
-
-  useEffect(() => {
-    setWords(generateWords(numberOfWord));
-  }, []);
-
-  const refresh = (numberOfWord: number) => {
-    setWords(generateWords(numberOfWord));
-    setUserInput('');
-    resetParagraphContent();
-    setStartTime(false);
-    setEndTime(false);
-    setEnd(true);
-
-  };
-
-  const generateWords = (numberOfWord: number) => {
-    return faker.word.words(numberOfWord);
-  };
-
-  const getColorForCharacter = (userChar: string, wordChar: string) => {
-    if (userChar === wordChar) {
-     return '#FFCEFB'; 
-    } else if (userChar) {
-      return 'red'; 
-    } else {
-      return '#6DEAFF'; 
-    }
-  };
-
-  const coloredText = (text: string) => {
-    const characters = text.split('');
-    const coloredText = characters.map((char, index) => (
-      <span  key={index} style={{ color: getColorForCharacter(userInput[index], char) }}>
-        {char}
-      </span>
-    ));
-    return coloredText;
-  };
-
-  useEffect(() => {
-    setUserInput(paragraphContent)
-  },[paragraphContent])
-
-  const endFunction = () =>{
-    setWords(generateWords(numberOfWord));
-    setUserInput('');
-    resetParagraphContent();
-    setStartTime(false);
-    setEndTime(true);
-    setEnd(true);
-
+  function restart(seconds = duration) {
+    setDuration(seconds);
+    setPassage(racePassage(seconds));
+    setInput('');
+    setStartsAt(null);
   }
 
-  const endTimer = () =>{
-    setWords(generateWords(numberOfWord));
-    setUserInput('');
-    resetParagraphContent();
-    setStartTime(false);
-    setEnd(true);
+  function type(value: string) {
+    const time = Date.now();
+    if (startsAt !== null && time >= startsAt + duration * 1000) return;
+    setInput(value);
+    if (startsAt === null && value) {
+      setStartsAt(time);
+      setNow(time);
+    }
   }
 
-  useEffect(() => {
-    if (userInput) {
-      setStartTime(true);
-      setEndTime(false)
-    }
-  }, [userInput]);
- 
-
-  const changeTime = (time: number) =>{
-    setTimeInSeconds(time);
-  }
-
-  const checkCorrectWords = () => {
-    const inputWords = userInput.split(' ');
-    const originalWords = words.split(' ');
-    let correct = 0;
-    let wrong = 0;
-
-    for (let i = 0; i < inputWords.length; i++) {
-      if (inputWords[i] === originalWords[i]) {
-        correct++;
-      } else {
-        wrong++;
-      }
-    }
-
-
-    setCorrectWords(correct);
-    setWrongWords(wrong);
-  };
-
-  useEffect(() => {
-    if (userInput) {
-      checkCorrectWords();
-      checkCorrectCharacters();
-    }
-  }, [userInput]);
-
-
-  const checkCorrectCharacters= () => {
-    const inputWords = userInput;
-    const originalWords = words;
-    let correct = 0;
-    let wrong = 0;
-
-    for (let i = 0; i < inputWords.length; i++) {
-      if (inputWords[i] === originalWords[i]) {
-        correct++;
-      } else {
-        wrong++;
-      }
-    }
-
-    setCorrectChar(correct);
-    setWrongChar(wrong);
-    
-  }
-
- 
- 
   return (
     <>
-    <div className=' text-2xl p-11 '>
-        <div className='flex items-center justify-center gap-3 rounded-lg '> 
-            <button style={
-                {
-                    color: timeInSeconds === 15 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back' type="button" onClick={() =>{
-                changeTime(15)
-                refresh(numberOfWord)
-                }}>15s</button>
-            <button style={
-                {
-                    color: timeInSeconds === 30 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back' type="button" onClick={() =>{
-                changeTime(30)
-                refresh(numberOfWord)
-                }}>30s</button>
-            <button style={
-                {
-                    color: timeInSeconds === 60 ? '#FFCEFB ': '',
-                  }
-            } className='cursor-pointer rounded-md p-2 font-mono text-xl back ' type="button" onClick={() =>{
-                changeTime(60)
-                refresh(numberOfWord)
-                }}>60s</button>
+      <section className="practice-hero">
+        <div>
+          <h1>Find your <em>rhythm.</em></h1>
+          <p>Practice at your own pace or race your friends in real time.</p>
         </div>
-      
-      <Timer startTime={startTime} endFunction={endFunction} 
-      timeInSeconds={timeInSeconds} end={end} endTimer={endTimer}  />
-      <br />
-      <p className='px-11 text-justify word-spacing-10 tracking-wider'>{coloredText(words)}</p>
-      <br />
-      <div className="flex justify-center items-center pt-5">
-        <button type="button"  className='cursor-pointer rounded-md p-3 font-nunito text-xl back   ' onClick={() => refresh(numberOfWord)}>
-            Refresh
-        </button>
+        <div className="hero-keys" aria-hidden="true">
+          <span>F</span><span>A</span><span>S</span><span>T</span>
+        </div>
+      </section>
+      <section className="panel practice-panel" aria-labelledby="practice-heading">
+        <div className="panel-bar">
+          <h2 id="practice-heading">{finished ? 'Test results' : 'Typing test'}</h2>
+          <div className="segmented" role="group" aria-label="Test duration">
+            {roundDurations.map((seconds) => <button type="button" key={seconds}
+              aria-pressed={duration === seconds} onClick={() => restart(seconds)}>{seconds}s</button>)}
+          </div>
+        </div>
+        <div className="stats">
+          <div><span>{finished ? 'Duration' : 'Time left'}</span><strong className="accent" role={finished ? undefined : 'timer'}>{Math.ceil(remaining / 1000) || duration}<small>s</small></strong></div>
+          <div><span>Speed</span><strong>{wpm}<small> WPM</small></strong></div>
+          <div><span>Accuracy</span><strong>{input ? accuracy + '%' : '—'}</strong></div>
+        </div>
+        <div className="time-track" aria-hidden="true"><div style={{ width: (remaining / (duration * 1000)) * 100 + '%' }} /></div>
+        <div className="panel-content">
+          {finished
+            ? <p className="result-summary">{correct} correct characters out of {input.length} typed.</p>
+            : <TypingField passage={passage} value={input} onChange={type} />}
+        </div>
+        <footer className="panel-footer">
+          <button type="button" className="button" onClick={() => restart()}>
+            <span aria-hidden="true">↻</span> {finished ? 'Try again' : 'Restart test'}
+          </button>
+          {!finished && <span className="muted">Start typing, or tap the passage to open the keyboard.</span>}
+        </footer>
+      </section>
+      <div className="race-callout">
+        <div><h2>Race your friends</h2><p>Same passage, shared countdown, live scores.</p></div>
+        <Link className="button button-primary" to="/create">Play with Friends <span aria-hidden="true">↗</span></Link>
       </div>
-      
-      <br />
-      <ResultPopUp onClose={onClose} openModal={openModal} correctChars={correctChar} wrongChars={wrongChar} 
-        correctWords={correctWords} wrongWords={wrongWords} timeInSeconds={timeInSeconds}/>
-      {/* {
-        endTime ? <Result  correctChars={correctChar} wrongChars={wrongChar} 
-        correctWords={correctWords} wrongWords={wrongWords} timeInSeconds={timeInSeconds}/>
-        : null
-      } */}
-     
-      
-    </div>
     </>
-    
   );
-};
-
-export default Paragraph;
-
-
+}

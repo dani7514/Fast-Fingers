@@ -1,72 +1,51 @@
-
-import React, { FC, useState } from 'react';
+import { useState } from 'react';
+import { FirebaseError } from 'firebase/app';
+import { User } from 'firebase/auth';
+import { Link, useNavigate } from 'react-router-dom';
 import { createRoom } from '../room/room';
-import { User } from '@firebase/auth';
-import { Link } from 'react-router-dom';
-import { Button } from 'flowbite-react';
-import { useNavigate } from 'react-router-dom';
 
-interface RoomCreationProps {
-    user: User
-}
+export default function RoomCreation({ user }: { user: User }) {
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState('');
 
-const RoomCreation: FC<RoomCreationProps> = ({user}) => {
-
-  const navigate=useNavigate()
-
-    const player= {
-        uid: user.uid,
-        displayName: user.displayName || '',
-        photoUrl: user?.photoURL || '',
-        lastTyped: '',
-        Wpm: 0  
-    }
-
-    const paragraph="this is a paragraph"
-    const timeInSeconds = 30
-
-
-  const handleCreateRoom = async () => {
+  async function handleCreateRoom() {
+    setCreating(true);
+    setError('');
     try {
-      const roomId = await createRoom(player,paragraph,timeInSeconds);
-      console.log('Created room with ID:', roomId);
-      navigate(`/waiting/${roomId}`);
-    } catch (error: any) {
-      console.error('Error creating room:', error.message);
+      const roomId = await createRoom(user);
+      navigate('/waiting/' + roomId);
+    } catch (error) {
+      if (error instanceof FirebaseError) {
+        setError(error.code === 'permission-denied'
+          ? 'Firestore denied room creation (permission-denied). Check the rules for /rooms in Firebase.'
+          : `Unable to create a room (${error.code}). ${error.message}`);
+      } else {
+        setError(error instanceof Error ? error.message : 'Unable to create a room. Try again.');
+      }
+    } finally {
+      setCreating(false);
     }
-  };
+  }
 
   return (
-    <div className="pt-20 flex flex-col justify-center items-center gap-8 sm:gap-9">
-      <h1 className="font-bold text-2xl sm:text-3xl">Compute With Your Friends</h1>
-      <p className="px-10 text-center  text-xl  colour font-nunito leading-6  ">
-        Game rules Lorem ipsum, dolor sit amet consectetur adipisicing elit.
-        Culpa et asperiores aspernatur aliquam optio magni totam nostrum, ut
-        nemo doloribus possimus placeat fugit, impedit, maxime atque at illo
-        enim. Dolores provident, modi, sit commodi nemo saepe fuga, soluta eius
-        dolorum numquam ex fugiat maxime in vero. Id mollitia cupiditate
-        perferendis.
-      </p>
-      <div className="flex flex-col items-center sm:flex-row gap-6 sm:gap-14">
-        <button
-          onClick={handleCreateRoom}
-          className="relative px-8 py-3 sm:px-9 sm:py-3 text-sm sm:text-base rounded-md text-skin-muted-button bg-skin-button-base transition-all duration-300 ease-in-out
-                    hover:bg-transparent hover:bg-gradient-to-r hover:from-hue-base hover:via-hue-base hover:to-hue-base bg-[length:0%_4px] hover:bg-[length:100%_4px] hover:bg-no-repeat bg-bottom
-                    before:w-0 before:bg-skin-button-muted/50 before:content-[''] before:absolute before:h-full before:top-0 before:left-0 hover:before:w-full before:transition-all before:duration-300 before:ease-in-out before:rounded-md"
-        >
-          Create Room
-        </button>
-        <Link
-          to="/join"
-          className="relative px-6 py-3 sm:px-9 sm:py-3 text-sm sm:text-base rounded-md text-skin-inverted bg-skin-button-muted transition-all duration-300 ease-in-out
-          hover:text-skin-muted-button hover:bg-transparent hover:bg-gradient-to-r hover:from-hue-inverted hover:via-hue-inverted hover:to-hue-inverted bg-[length:0%_4px] hover:bg-[length:100%_4px] hover:bg-no-repeat bg-bottom
-          before:w-0 before:bg-skin-button-base/50 before:content-[''] before:absolute before:h-full before:top-0 before:left-0 hover:before:w-full before:transition-all before:duration-300 before:ease-in-out before:rounded-md"
-        >
-          Join Room
-        </Link>
+    <section className="narrow-page">
+      <div className="page-heading">
+        <h1>Race your friends</h1>
+        <p>Share an invite and see who can type the same passage fastest.</p>
       </div>
-    </div>
+      <div className="panel">
+        <div className="panel-content stack">
+          <h2 className="section-heading">Start or join a race</h2>
+          <div className="actions">
+            <button type="button" className="button button-primary" onClick={handleCreateRoom} disabled={creating}>
+              {creating ? 'Creating…' : 'Create Room'}
+            </button>
+            <Link className="button" to="/join">Join Room</Link>
+          </div>
+          {error && <p role="alert" className="notice">{error}</p>}
+        </div>
+      </div>
+    </section>
   );
-};
-
-export default RoomCreation;
+}

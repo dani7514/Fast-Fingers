@@ -53,5 +53,5 @@ export const signInWithGoogle = async () => {
   };
   
   export const onAuthStateChange = (callback: (user: User | null) => void) => {
-    onAuthStateChanged(auth, callback);
+    return onAuthStateChanged(auth, callback);
   };
