@@ -7,6 +7,7 @@ import { db } from '../config/firebase.config';
 const countdownSeconds = 3;
 const presenceIntervalMs = 5000;
 const presenceExpiryMs = 20000;
+const maxJoinAttempts = 5;
 export const resultSyncMs = 5000;
 export const roundDurations = [15, 30, 60, 120];
 
@@ -143,14 +144,35 @@ export async function joinRoom(roomId: string, user: User) {
   }
 
   const reference = roomRef(roomId);
-  await runTransaction(db, async (transaction) => {
-    const room = (await transaction.get(reference)).data() as Room | undefined;
-    if (!room) throw new Error('Room not found. Check the room ID.');
-    if (room.players.some((player) => player.uid === user.uid)) return;
-    if (getRoundStart(room) !== null) throw new Error('This race has already started.');
+  const player = makePlayer(user);
 
-    transaction.update(reference, { players: [...room.players, makePlayer(user)] });
-  });
+  for (let attempt = 1; ; attempt++) {
+    let attemptedRosterSize: number | undefined;
+    try {
+      await runTransaction(db, async (transaction) => {
+        const room = (await transaction.get(reference)).data() as Room | undefined;
+        if (!room) throw new Error('Room not found. Check the room ID.');
+        if (room.players.some((entry) => entry.uid === player.uid)) return;
+        if (getRoundStart(room) !== null) throw new Error('This race has already started.');
+
+        attemptedRosterSize = room.players.length;
+        transaction.update(reference, { players: [...room.players, player] });
+      });
+      return;
+    } catch (error) {
+      if (!(error instanceof FirebaseError) || error.code !== 'permission-denied' || attemptedRosterSize === undefined) {
+        throw error;
+      }
+
+      // The rules can reject a stale roster before Firestore retries the transaction.
+      const latest = (await getDocFromServer(reference)).data() as Room | undefined;
+      if (!latest) throw new Error('Room not found. Check the room ID.');
+      if (latest.players.some((entry) => entry.uid === player.uid)) return;
+      if (getRoundStart(latest) !== null) throw new Error('This race has already started.');
+      if (latest.players.length <= attemptedRosterSize) throw error;
+      if (attempt === maxJoinAttempts) throw new Error('Several players are joining at once. Try joining again.');
+    }
+  }
 }
 
 export async function startRematch(roomId: string, uid: string) {
@@ -222,7 +244,6 @@ export async function startRoom(roomId: string, uid: string, paragraph: string, 
       timeInSeconds,
       gameStarted: true,
       startedAt: serverTimestamp(),
-      players: room.players.map((player) => ({ ...player, lastTyped: '', Wpm: 0 })),
     });
   });
 }
