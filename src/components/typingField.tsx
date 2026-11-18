@@ -1,14 +1,23 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
+export interface PassageCursor {
+  uid: string;
+  name: string;
+  position: number;
+  color: string;
+}
+
 interface TypingFieldProps {
   passage: string;
   value: string;
   disabled?: boolean;
   focusWhenReady?: boolean;
+  cursors?: PassageCursor[];
+  onCursorChange?: (position: number) => void;
   onChange: (value: string) => void;
 }
 
-export default function TypingField({ passage, value, disabled = false, focusWhenReady = false, onChange }: TypingFieldProps) {
+export default function TypingField({ passage, value, disabled = false, focusWhenReady = false, cursors, onCursorChange, onChange }: TypingFieldProps) {
   const inputId = useId();
   const passageId = useId();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -16,6 +25,12 @@ export default function TypingField({ passage, value, disabled = false, focusWhe
   const caret = useRef<HTMLSpanElement>(null);
   const [selection, setSelection] = useState(value.length);
   const cursorPosition = Math.min(selection, value.length);
+  const cursorGroups = new Map<number, PassageCursor[]>();
+  for (const cursor of cursors ?? []) {
+    const group = cursorGroups.get(cursor.position) ?? [];
+    group.push(cursor);
+    cursorGroups.set(cursor.position, group);
+  }
   let offset = 0;
 
   useEffect(() => {
@@ -40,11 +55,12 @@ export default function TypingField({ passage, value, disabled = false, focusWhe
       const typed = value + event.key;
       setSelection(typed.length);
       onChange(typed);
+      onCursorChange?.(typed.length);
     }
 
     document.addEventListener('keydown', startTyping);
     return () => document.removeEventListener('keydown', startTyping);
-  }, [disabled, onChange, passage, value]);
+  }, [disabled, onChange, onCursorChange, passage, value]);
 
   useEffect(() => {
     const box = passageBox.current;
@@ -56,10 +72,24 @@ export default function TypingField({ passage, value, disabled = false, focusWhe
     if (position.top < bounds.top) box.scrollTop -= bounds.top - position.top;
   }, [passage, value, cursorPosition]);
 
+  function markers(position: number) {
+    const group = cursorGroups.get(position);
+    if (!group) return null;
+    return <span className="race-cursors" aria-hidden="true" style={{ color: group[0].color }}>
+      {group.map((cursor) => <span key={cursor.uid} className="race-cursor-name" title={cursor.name}
+        data-name={cursor.name} style={{ backgroundColor: cursor.color }} />)}
+    </span>;
+  }
+
+  function reportSelection(position: number) {
+    setSelection(position);
+    onCursorChange?.(position);
+  }
+
   return (
     <div className="typing-field" onClick={() => input.current?.focus({ preventScroll: true })}>
       {passage ? (
-        <p className="passage" ref={passageBox} id={passageId}>
+        <p className={'passage' + (cursorGroups.size ? ' passage-with-cursors' : '')} ref={passageBox} id={passageId}>
           {(passage.match(/\S+ *| +/g) || []).map((word, wordIndex) => {
             const start = offset;
             offset += word.length;
@@ -69,11 +99,14 @@ export default function TypingField({ passage, value, disabled = false, focusWhe
                 const state = value[position] === undefined ? '' : value[position] === character ? ' correct' : ' incorrect';
                 const current = position === cursorPosition && !disabled;
                 return <span key={index} ref={current ? caret : undefined}
-                  className={'passage-letter' + state + (current ? ' current' : '')}>{character}</span>;
+                  className={'passage-letter' + state + (current ? ' current' : '')}>{character}{markers(position)}</span>;
               })}
             </span>;
           })}
-          {cursorPosition === passage.length && <span className="passage-end current" ref={caret} aria-hidden="true" />}
+          {(cursorPosition === passage.length || cursorGroups.has(passage.length)) && (
+            <span className="passage-end" ref={cursorPosition === passage.length ? caret : undefined} aria-hidden="true"
+              data-current={cursorPosition === passage.length}>{markers(passage.length)}</span>
+          )}
         </p>
       ) : <p className="muted">Typing opens after the countdown.</p>}
       <label className="sr-only" htmlFor={inputId}>Type the passage</label>
@@ -82,13 +115,14 @@ export default function TypingField({ passage, value, disabled = false, focusWhe
         maxLength={passage.length} autoComplete="off" autoCorrect="off" autoCapitalize="off" spellCheck={false}
         onFocus={(event) => {
           event.currentTarget.setSelectionRange(value.length, value.length);
-          setSelection(value.length);
+          reportSelection(value.length);
         }}
-        onSelect={(event) => setSelection(event.currentTarget.selectionStart)}
+        onSelect={(event) => reportSelection(event.currentTarget.selectionStart)}
+        onKeyUp={(event) => reportSelection(event.currentTarget.selectionStart)}
         onPaste={(event) => event.preventDefault()} onDrop={(event) => event.preventDefault()}
         onChange={(event) => {
-          setSelection(event.currentTarget.selectionStart);
           onChange(event.currentTarget.value.replace(/\r?\n/g, ' '));
+          reportSelection(event.currentTarget.selectionStart);
         }} />
     </div>
   );

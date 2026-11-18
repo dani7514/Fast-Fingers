@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { FirebaseError } from 'firebase/app';
 import { User } from 'firebase/auth';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { createRoom, racePlayers, Room, saveProgress, scoreTyping, startRematch, trackRacePresence, typedInRoom } from '../room/room';
+import { createRoom, cursorInRoom, finalizeResults, racePlayers, resultSyncMs, Room, saveProgress, scoreTyping, startRematch, trackRacePresence, typedInRoom } from '../room/room';
 import TypingField from './typingField';
+
+const playerColors = ['#ffcefb', '#ffcc88', '#a6f1ba', '#c1c9ff', '#ff9fa9', '#6deaff'];
 
 interface RaceProps {
   roomId: string;
@@ -19,6 +21,7 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
   const [input, setInput] = useState(savedInput);
   const [now, setNow] = useState(Date.now);
   const [saveError, setSaveError] = useState(false);
+  const [resultsError, setResultsError] = useState('');
   const [confirmedInput, setConfirmedInput] = useState(savedInput);
   const [openingRematch, setOpeningRematch] = useState(false);
   const [rematchError, setRematchError] = useState('');
@@ -26,9 +29,13 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
   const [inviting, setInviting] = useState(false);
   const latestInput = useRef(savedInput);
   const syncedInput = useRef(savedInput);
+  const latestCursor = useRef(savedInput.length);
+  const syncedCursor = useRef(savedInput.length);
   const pendingSave = useRef<Promise<void>>();
   const endsAt = startsAt + room.timeInSeconds * 1000;
-  const finished = now >= endsAt;
+  const finalized = !!room.resultsFinalizedAt;
+  const finished = finalized || now >= endsAt;
+  const readyToFinalize = now >= endsAt + resultSyncMs;
   const racing = now >= startsAt && !finished;
   const playerIndex = room.players.findIndex((player) => player.uid === uid);
   const rematchRoomId = !room.nextPlayerUids || room.nextPlayerUids.includes(uid) ? room.nextRoomId : undefined;
@@ -36,23 +43,25 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
   useEffect(() => trackRacePresence(roomId, uid, playerIndex), [roomId, uid, playerIndex]);
 
   useEffect(() => {
-    if (finished) return;
+    if (finalized || readyToFinalize) return;
     const interval = window.setInterval(() => setNow(Date.now()), 100);
     return () => window.clearInterval(interval);
-  }, [finished]);
+  }, [finalized, readyToFinalize]);
 
   useEffect(() => {
-    if (saveError) return;
+    if (saveError || finalized) return;
     let active = true;
 
     async function syncProgress() {
       if (pendingSave.current) await pendingSave.current;
       const value = latestInput.current;
-      if (!active || pendingSave.current || value === syncedInput.current) return;
+      const cursor = Math.min(latestCursor.current, value.length);
+      if (!active || pendingSave.current || (value === syncedInput.current && cursor === syncedCursor.current)) return;
 
-      pendingSave.current = saveProgress(roomId, uid, value)
+      pendingSave.current = saveProgress(roomId, uid, value, cursor)
         .then(() => {
           syncedInput.current = value;
+          syncedCursor.current = cursor;
           setConfirmedInput(value);
         })
         .catch(() => { if (active) setSaveError(true); })
@@ -66,7 +75,14 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
       active = false;
       window.clearInterval(interval);
     };
-  }, [finished, roomId, saveError, uid]);
+  }, [finalized, finished, roomId, saveError, uid]);
+
+  useEffect(() => {
+    if (!readyToFinalize || finalized || resultsError || rematchRoomId) return;
+    void finalizeResults(roomId, playerIndex).catch(() => {
+      setResultsError('Could not finalize the shared scores.');
+    });
+  }, [finalized, playerIndex, readyToFinalize, rematchRoomId, resultsError, roomId]);
 
   async function playAgain() {
     setOpeningRematch(true);
@@ -94,20 +110,26 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
     }
   }
 
-  if (rematchRoomId && finished && (input === confirmedInput || saveError)) {
+  if (rematchRoomId && finished && (finalized || input === confirmedInput || saveError)) {
     return <Navigate replace to={'/multiplayer/' + encodeURIComponent(rematchRoomId)} />;
   }
 
   const remaining = Math.max(0, endsAt - now);
-  const leaderboard = racePlayers(room).map((player) => {
-    const typed = player.uid === uid ? input : typedInRoom(room, player);
-    return { player, ...scoreTyping(room.paragraph, typed, room.timeInSeconds), typed: typed.length };
+  const elapsed = finished ? room.timeInSeconds : Math.max(1, (now - startsAt) / 1000);
+  const players = racePlayers(room);
+  const cursors = players.flatMap((player, index) => player.uid === uid ? [] : [{
+    uid: player.uid, name: player.displayName, position: cursorInRoom(room, player), color: playerColors[index % playerColors.length],
+  }]);
+  const personal = scoreTyping(room.paragraph, input, elapsed);
+  const leaderboard = players.map((player, index) => {
+    const typed = !finished && player.uid === uid ? input : typedInRoom(room, player);
+    return { player, color: playerColors[index % playerColors.length], ...scoreTyping(room.paragraph, typed, elapsed), typed: typed.length };
   }).sort((a, b) => b.correct - a.correct || b.accuracy - a.accuracy);
 
   return (
     <section>
       <div className="page-heading">
-        <h1>{finished ? 'Race results' : 'Typing race'}</h1>
+        <h1>{finalized ? 'Race results' : finished ? 'Finalizing results' : 'Typing race'}</h1>
         <p>{finished ? room.timeInSeconds + '-second race' : 'Type the shared passage before the clock runs out.'}</p>
       </div>
       {!finished && (
@@ -124,7 +146,12 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
             <div style={{ width: Math.min(100, (remaining / (room.timeInSeconds * 1000)) * 100) + '%' }} />
           </div>
           <div className="panel-content">
+            {racing && <div className="personal-score" aria-label="Your live score">
+              <span>Your score</span><strong>{personal.wpm} WPM</strong><strong>{personal.accuracy}% accuracy</strong>
+            </div>}
             <TypingField passage={racing ? room.paragraph : ''} value={input} disabled={!racing} focusWhenReady
+              cursors={racing ? cursors : undefined}
+              onCursorChange={(position) => { latestCursor.current = position; }}
               onChange={(value) => {
                 if (Date.now() < startsAt || Date.now() >= endsAt) return;
                 latestInput.current = value;
@@ -133,24 +160,41 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
           </div>
         </div>
       )}
-      <div className="panel score-panel">
+      {finished && !finalized ? (
+        <div className="panel score-panel">
+          <div className="panel-content stack">
+            {resultsError ? <p role="alert" className="notice">
+              {resultsError} <button className="underline" onClick={() => setResultsError('')}>Retry</button>
+            </p> : <p role="status" className="muted">Syncing the final scores for everyone…</p>}
+            {saveError && <p role="alert" className="notice">
+              Your last update could not be synced. <button className="underline" onClick={() => setSaveError(false)}>Retry</button>
+            </p>}
+          </div>
+        </div>
+      ) : <div className="panel score-panel">
         <div className="panel-bar">
           <h2>{finished ? 'Leaderboard' : 'Player progress'}</h2>
         </div>
         <div className="panel-content stack">
           <ol className="stack">
-            {leaderboard.map(({ player, correct, accuracy, wpm, typed }, index) => (
+            {leaderboard.map(({ player, color, correct, accuracy, wpm, typed }, index) => (
               <li key={player.uid} className="score-row">
                 <p className="font-bold">
                   {finished && <span className="rank" aria-label={'Rank ' + (index + 1)}>{index + 1}</span>}
+                  {!finished && <span className="player-dot" style={{ backgroundColor: color }} aria-hidden="true" />}
                   {player.displayName}{player.uid === uid && ' (you)'}
                 </p>
                 <p>{finished ? wpm + ' WPM · ' + accuracy + '% accuracy · ' + correct + ' correct characters'
                   : correct + ' correct of ' + typed + ' typed'}</p>
+                {!finished && <>
+                  <p>{wpm} WPM · {accuracy}% accuracy</p>
+                  <progress className="player-progress" value={typed} max={room.paragraph.length}
+                    style={{ accentColor: color }} aria-label={player.displayName + ' passage progress'} />
+                </>}
               </li>
             ))}
           </ol>
-          {saveError && <div role="alert" className="notice">
+          {saveError && !finalized && <div role="alert" className="notice">
             Progress could not be synced. <button className="underline" onClick={() => setSaveError(false)}>Retry</button>
           </div>}
           {rematchError && <p role="alert" className="notice">{rematchError}</p>}
@@ -167,16 +211,15 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
                   </button>
                 </div>
               </div>
-            ) : input === confirmedInput && (
+            ) : (
               <button className="button button-primary" type="button" disabled={openingRematch} onClick={playAgain}>
                 {openingRematch ? 'Starting rematch…' : 'Play again'}
               </button>
             )}
-            {input !== confirmedInput && !saveError && <p role="status" className="muted">Saving your result…</p>}
             {!friendsLeft && !room.nextRoomId && <span className="muted">Play again starts a rematch with players who are still here.</span>}
           </footer>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

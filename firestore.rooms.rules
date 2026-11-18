@@ -34,7 +34,7 @@ service cloud.firestore {
           && after.paragraph is string
           && after.paragraph.size() > 0
           && after.paragraph.size() <= 4096
-          && after.timeInSeconds in [15, 30, 60]
+          && after.timeInSeconds in [15, 30, 60, 120]
           && after.gameStarted == true
           && after.startedAt == request.time;
       }
@@ -49,10 +49,16 @@ service cloud.firestore {
           && removed.size() == 1 && added.size() == 1
           && before.players.removeAll(removed) == after.players.removeAll(added)
           && removed[0].uid == request.auth.uid
-          && added[0].diff(removed[0]).affectedKeys().hasOnly(['lastTyped', 'Wpm'])
+          && added[0].diff(removed[0]).affectedKeys().hasOnly(['lastTyped', 'Wpm', 'cursor'])
           && added[0].lastTyped is string
           && added[0].lastTyped.size() <= before.paragraph.size()
+          && validCursor(added[0])
           && added[0].Wpm is int && added[0].Wpm >= 0;
+      }
+
+      function validCursor(progress) {
+        let cursor = progress.get('cursor', progress.lastTyped.size());
+        return cursor is int && cursor >= 0 && cursor <= progress.lastTyped.size() * 2;
       }
 
       function roomPath(id) {
@@ -105,10 +111,20 @@ service cloud.firestore {
         let progress = after.progress[request.auth.uid];
         return after.diff(before).affectedKeys().hasOnly(['progress'])
           && after.progress.diff(before.progress).affectedKeys().hasOnly([request.auth.uid])
-          && progress.keys().hasOnly(['playerIndex', 'lastTyped', 'Wpm'])
+          && progress.keys().hasOnly(['playerIndex', 'lastTyped', 'Wpm', 'cursor'])
           && isPlayerAt(before, progress.playerIndex)
           && progress.lastTyped is string && progress.lastTyped.size() <= before.paragraph.size()
+          && validCursor(progress)
           && progress.Wpm is int && progress.Wpm >= 0;
+      }
+
+      function finalizingResults(before, after) {
+        return !('resultsFinalizedAt' in before)
+          && before.startedAt is timestamp
+          && request.time >= before.startedAt + duration.value(before.timeInSeconds + 7, 's')
+          && after.diff(before).affectedKeys().hasOnly(['resultsFinalizedAt', 'resultsFinalizedByIndex'])
+          && after.resultsFinalizedAt == request.time
+          && isPlayerAt(before, after.resultsFinalizedByIndex);
       }
 
       allow get: if signedIn();
@@ -125,8 +141,10 @@ service cloud.firestore {
         && (linkingRematch(resource.data, request.resource.data)
           || joining(resource.data, request.resource.data)
           || starting(resource.data, request.resource.data)
-          || ('progress' in resource.data && typingRematch(resource.data, request.resource.data))
-          || typing(resource.data, request.resource.data));
+          || finalizingResults(resource.data, request.resource.data)
+          || (!('resultsFinalizedAt' in resource.data)
+            && (('progress' in resource.data && typingRematch(resource.data, request.resource.data))
+              || typing(resource.data, request.resource.data))));
 
       match /presence/{sessionId} {
         function validPresence() {

@@ -128,6 +128,7 @@ test('one player can start a rematch for everyone in the race', async () => {
   const hostUI = within(hostView.container);
   await act(async () => { fireEvent.click(hostUI.getByRole('button', { name: 'Create Room' })); });
   expect(hostUI.getByRole('button', { name: 'Start Race' })).toBeDisabled();
+  expect(hostUI.getByRole('button', { name: '120s' })).toHaveAttribute('aria-pressed', 'false');
 
   const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
   const writeText = jest.fn().mockResolvedValue(undefined);
@@ -164,17 +165,33 @@ test('one player can start a rematch for everyone in the race', async () => {
   expect(paragraph).not.toBe('');
   expect(document.getElementById(guestPassageId)).toHaveTextContent(paragraph);
 
-  fireEvent.change(guestUI.getByRole('textbox'), { target: { value: paragraph.slice(0, 5) } });
+  const guestInput = guestUI.getByRole('textbox') as HTMLTextAreaElement;
+  fireEvent.change(guestInput, { target: { value: paragraph.slice(0, 5) } });
+  expect(guestUI.getByLabelText('Your live score')).toHaveTextContent('60 WPM100% accuracy');
   await act(async () => { jest.advanceTimersByTime(750); });
   expect(hostUI.getByText('5 correct of 5 typed')).toBeInTheDocument();
+  expect(hostUI.getByRole('progressbar', { name: 'Guest passage progress' })).toHaveAttribute('value', '5');
+  const hostPassage = document.getElementById(hostPassageId)!;
+  const letters = hostPassage.querySelectorAll('.passage-letter');
+  expect(letters[5].querySelector('[data-name="Guest"]')).toBeInTheDocument();
+  guestInput.setSelectionRange(2, 2);
+  fireEvent.keyUp(guestInput, { key: 'ArrowLeft' });
+  await act(async () => { jest.advanceTimersByTime(750); });
+  expect(letters[2].querySelector('[data-name="Guest"]')).toBeInTheDocument();
 
-  act(() => { jest.advanceTimersByTime(14200); });
+  act(() => { jest.advanceTimersByTime(13450); });
   fireEvent.change(guestUI.getByRole('textbox'), { target: { value: paragraph.slice(0, 10) } });
   await act(async () => { jest.advanceTimersByTime(50); });
+
+  expect(hostUI.getByRole('heading', { name: 'Finalizing results' })).toBeInTheDocument();
+  expect(guestUI.queryByRole('heading', { name: 'Leaderboard' })).toBeNull();
+  expect(guestUI.queryByRole('button', { name: 'Play again' })).toBeNull();
+  await act(async () => { jest.advanceTimersByTime(5000); });
 
   expect(hostUI.getByRole('heading', { name: 'Race results' })).toBeInTheDocument();
   expect(guestUI.queryByRole('textbox')).toBeNull();
   expect(hostUI.getByText('8 WPM · 100% accuracy · 10 correct characters')).toBeInTheDocument();
+  expect(guestUI.getByText('8 WPM · 100% accuracy · 10 correct characters')).toBeInTheDocument();
 
   await act(async () => { fireEvent.click(guestUI.getByRole('button', { name: 'Play again' })); });
   expect(hostUI.getByRole('timer')).toHaveTextContent('Starts in 3');
@@ -188,7 +205,7 @@ test('one player can start a rematch for everyone in the race', async () => {
   expect(hostUI.getByText('5 correct of 5 typed')).toBeInTheDocument();
 
   hostView.unmount();
-  await act(async () => { jest.advanceTimersByTime(14250); });
+  await act(async () => { jest.advanceTimersByTime(19250); });
   await act(async () => { fireEvent.click(guestUI.getByRole('button', { name: 'Play again' })); });
   expect(guestUI.getByRole('status')).toHaveTextContent('Your friends have left the room.');
   expect(guestUI.getByRole('link', { name: 'Practice solo' })).toHaveAttribute('href', '/');

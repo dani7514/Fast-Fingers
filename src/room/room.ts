@@ -6,11 +6,13 @@ import { db } from '../config/firebase.config';
 const countdownSeconds = 3;
 const presenceIntervalMs = 5000;
 const presenceExpiryMs = 20000;
-export const roundDurations = [15, 30, 60];
+export const resultSyncMs = 5000;
+export const roundDurations = [15, 30, 60, 120];
 
 interface Progress {
   lastTyped: string;
   Wpm: number;
+  cursor?: number;
 }
 
 interface Player extends Progress {
@@ -29,6 +31,7 @@ export interface Room {
   nextRoomId?: string;
   nextPlayerUids?: string[];
   activePlayerUids?: string[];
+  resultsFinalizedAt?: Timestamp;
   progress?: Record<string, Progress & { playerIndex: number }>;
 }
 
@@ -105,6 +108,11 @@ export function racePassage(duration: number) {
 
 export function typedInRoom(room: Room, player: Player) {
   return room.progress ? room.progress[player.uid]?.lastTyped ?? '' : player.lastTyped;
+}
+
+export function cursorInRoom(room: Room, player: Player) {
+  const progress = room.progress ? room.progress[player.uid] : player;
+  return Math.min(room.paragraph.length, Math.max(0, progress?.cursor ?? progress?.lastTyped.length ?? 0));
 }
 
 function makeRoom(user: User): Room {
@@ -219,25 +227,40 @@ export function scoreTyping(paragraph: string, input: string, timeInSeconds: num
   return { correct, accuracy, wpm: Math.round(correct * 60 / (5 * timeInSeconds)) };
 }
 
-export async function saveProgress(roomId: string, uid: string, input: string) {
+export async function finalizeResults(roomId: string, playerIndex: number) {
+  const reference = roomRef(roomId);
+  await runTransaction(db, async (transaction) => {
+    const room = (await transaction.get(reference)).data() as Room | undefined;
+    if (!room) throw new Error('This race is unavailable.');
+    if (room.resultsFinalizedAt) return;
+
+    transaction.update(reference, {
+      resultsFinalizedAt: serverTimestamp(),
+      resultsFinalizedByIndex: playerIndex,
+    });
+  });
+}
+
+export async function saveProgress(roomId: string, uid: string, input: string, cursor: number) {
   const reference = roomRef(roomId);
   await runTransaction(db, async (transaction) => {
     const room = (await transaction.get(reference)).data() as Room | undefined;
     if (!room || getRoundStart(room) === null) throw new Error('This race is unavailable.');
+    if (room.resultsFinalizedAt) return;
     const player = racePlayers(room).find((entry) => entry.uid === uid);
     if (!player) throw new Error('You are not in this room.');
-    if (typedInRoom(room, player) === input) return;
+    if (typedInRoom(room, player) === input && cursorInRoom(room, player) === cursor) return;
 
     const { wpm } = scoreTyping(room.paragraph, input, room.timeInSeconds);
     if (room.progress) {
       transaction.update(reference, {
-        progress: { ...room.progress, [uid]: { lastTyped: input, Wpm: wpm, playerIndex: room.players.indexOf(player) } },
+        progress: { ...room.progress, [uid]: { lastTyped: input, Wpm: wpm, cursor, playerIndex: room.players.indexOf(player) } },
       });
       return;
     }
     transaction.update(reference, {
       players: room.players.map((entry) => entry.uid === uid
-        ? { ...entry, lastTyped: input, Wpm: wpm }
+        ? { ...entry, lastTyped: input, Wpm: wpm, cursor }
         : entry),
     });
   });
