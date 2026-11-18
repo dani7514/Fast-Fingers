@@ -107,10 +107,11 @@ service cloud.firestore {
           && getAfter(roomPath(after.nextRoomId)).data.previousRoomId == roomId;
       }
 
-      function typingRematch(before, after) {
+      function typingProgress(before, after) {
         let progress = after.progress[request.auth.uid];
-        return after.diff(before).affectedKeys().hasOnly(['progress'])
-          && after.progress.diff(before.progress).affectedKeys().hasOnly([request.auth.uid])
+        return before.get('startedAt', null) is timestamp
+          && after.diff(before).affectedKeys().hasOnly(['progress'])
+          && after.progress.diff(before.get('progress', {})).affectedKeys().hasOnly([request.auth.uid])
           && progress.keys().hasOnly(['playerIndex', 'lastTyped', 'Wpm', 'cursor'])
           && isPlayerAt(before, progress.playerIndex)
           && progress.lastTyped is string && progress.lastTyped.size() <= before.paragraph.size()
@@ -143,7 +144,7 @@ service cloud.firestore {
           || starting(resource.data, request.resource.data)
           || finalizingResults(resource.data, request.resource.data)
           || (!('resultsFinalizedAt' in resource.data)
-            && (('progress' in resource.data && typingRematch(resource.data, request.resource.data))
+            && (typingProgress(resource.data, request.resource.data)
               || typing(resource.data, request.resource.data))));
 
       match /presence/{sessionId} {

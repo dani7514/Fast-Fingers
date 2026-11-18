@@ -31,6 +31,7 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
   const syncedInput = useRef(savedInput);
   const latestCursor = useRef(savedInput.length);
   const syncedCursor = useRef(savedInput.length);
+  const raceRoom = useRef(room);
   const pendingSave = useRef<Promise<void>>();
   const endsAt = startsAt + room.timeInSeconds * 1000;
   const finalized = !!room.resultsFinalizedAt;
@@ -41,6 +42,8 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
   const rematchRoomId = !room.nextPlayerUids || room.nextPlayerUids.includes(uid) ? room.nextRoomId : undefined;
 
   useEffect(() => trackRacePresence(roomId, uid, playerIndex), [roomId, uid, playerIndex]);
+
+  useEffect(() => { raceRoom.current = room; }, [room]);
 
   useEffect(() => {
     if (finalized || readyToFinalize) return;
@@ -58,7 +61,7 @@ export default function MultiplayerParagraph({ roomId, room, user, startsAt, sav
       const cursor = Math.min(latestCursor.current, value.length);
       if (!active || pendingSave.current || (value === syncedInput.current && cursor === syncedCursor.current)) return;
 
-      pendingSave.current = saveProgress(roomId, uid, value, cursor)
+      pendingSave.current = saveProgress(roomId, raceRoom.current, uid, value, cursor)
         .then(() => {
           syncedInput.current = value;
           syncedCursor.current = cursor;

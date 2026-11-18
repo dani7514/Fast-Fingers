@@ -1,6 +1,7 @@
 import { faker } from '@faker-js/faker';
+import { FirebaseError } from 'firebase/app';
 import { User } from 'firebase/auth';
-import { addDoc, collection, deleteDoc, doc, getDocsFromServer, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, deleteDoc, doc, FieldPath, getDocFromServer, getDocsFromServer, onSnapshot, runTransaction, serverTimestamp, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../config/firebase.config';
 
 const countdownSeconds = 3;
@@ -31,6 +32,7 @@ export interface Room {
   nextRoomId?: string;
   nextPlayerUids?: string[];
   activePlayerUids?: string[];
+  previousRoomId?: string;
   resultsFinalizedAt?: Timestamp;
   progress?: Record<string, Progress & { playerIndex: number }>;
 }
@@ -107,12 +109,16 @@ export function racePassage(duration: number) {
 }
 
 export function typedInRoom(room: Room, player: Player) {
-  return room.progress ? room.progress[player.uid]?.lastTyped ?? '' : player.lastTyped;
+  return progressInRoom(room, player)?.lastTyped ?? '';
 }
 
 export function cursorInRoom(room: Room, player: Player) {
-  const progress = room.progress ? room.progress[player.uid] : player;
+  const progress = progressInRoom(room, player);
   return Math.min(room.paragraph.length, Math.max(0, progress?.cursor ?? progress?.lastTyped.length ?? 0));
+}
+
+function progressInRoom(room: Room, player: Player) {
+  return room.progress?.[player.uid] ?? (room.previousRoomId ? undefined : player);
 }
 
 function makeRoom(user: User): Room {
@@ -229,39 +235,37 @@ export function scoreTyping(paragraph: string, input: string, timeInSeconds: num
 
 export async function finalizeResults(roomId: string, playerIndex: number) {
   const reference = roomRef(roomId);
-  await runTransaction(db, async (transaction) => {
-    const room = (await transaction.get(reference)).data() as Room | undefined;
-    if (!room) throw new Error('This race is unavailable.');
-    if (room.resultsFinalizedAt) return;
+  try {
+    await runTransaction(db, async (transaction) => {
+      const room = (await transaction.get(reference)).data() as Room | undefined;
+      if (!room) throw new Error('This race is unavailable.');
+      if (room.resultsFinalizedAt) return;
 
-    transaction.update(reference, {
-      resultsFinalizedAt: serverTimestamp(),
-      resultsFinalizedByIndex: playerIndex,
+      transaction.update(reference, {
+        resultsFinalizedAt: serverTimestamp(),
+        resultsFinalizedByIndex: playerIndex,
+      });
     });
-  });
+  } catch (error) {
+    // A simultaneous client may have locked the results before this write reached the rules.
+    if (error instanceof FirebaseError && error.code === 'permission-denied') {
+      const room = (await getDocFromServer(reference)).data() as Room | undefined;
+      if (room?.resultsFinalizedAt) return;
+    }
+    throw error;
+  }
 }
 
-export async function saveProgress(roomId: string, uid: string, input: string, cursor: number) {
-  const reference = roomRef(roomId);
-  await runTransaction(db, async (transaction) => {
-    const room = (await transaction.get(reference)).data() as Room | undefined;
-    if (!room || getRoundStart(room) === null) throw new Error('This race is unavailable.');
-    if (room.resultsFinalizedAt) return;
-    const player = racePlayers(room).find((entry) => entry.uid === uid);
-    if (!player) throw new Error('You are not in this room.');
-    if (typedInRoom(room, player) === input && cursorInRoom(room, player) === cursor) return;
+export async function saveProgress(roomId: string, room: Room, uid: string, input: string, cursor: number) {
+  if (room.resultsFinalizedAt) return;
+  const playerIndex = room.players.findIndex((player) => player.uid === uid);
+  const { wpm } = scoreTyping(room.paragraph, input, room.timeInSeconds);
 
-    const { wpm } = scoreTyping(room.paragraph, input, room.timeInSeconds);
-    if (room.progress) {
-      transaction.update(reference, {
-        progress: { ...room.progress, [uid]: { lastTyped: input, Wpm: wpm, cursor, playerIndex: room.players.indexOf(player) } },
-      });
-      return;
-    }
-    transaction.update(reference, {
-      players: room.players.map((entry) => entry.uid === uid
-        ? { ...entry, lastTyped: input, Wpm: wpm, cursor }
-        : entry),
+  // Commit only this player's field. A read followed by a whole-room update can
+  // be rejected by the rules if another player's update commits in between.
+  await runTransaction(db, async (transaction) => {
+    transaction.update(roomRef(roomId), new FieldPath('progress', uid), {
+      lastTyped: input, Wpm: wpm, cursor, playerIndex,
     });
   });
 }

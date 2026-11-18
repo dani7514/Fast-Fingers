@@ -24,6 +24,9 @@ jest.mock('firebase/firestore', () => {
     listeners.get(id)?.forEach((listener) => listener(snapshot(id)));
   };
   return {
+    FieldPath: class {
+      constructor(public mockField: string, public mockKey: string) {}
+    },
     collection: (_database: unknown, ...segments: string[]) => segments.join('/'),
     doc: (collection: unknown, _name?: string, id?: string) => ({
       id: id ?? 'rematch-' + ++nextId, collection,
@@ -56,7 +59,15 @@ jest.mock('firebase/firestore', () => {
       return callback({
         get: async ({ id }: { id: string }) => snapshot(id),
         set: ({ id }: { id: string }, data: Record<string, unknown>) => write(id, data),
-        update: ({ id }: { id: string }, data: Record<string, unknown>) => write(id, { ...rooms.get(id), ...data }),
+        update: ({ id }: { id: string }, data: Record<string, unknown>, value?: unknown) => {
+          const room = rooms.get(id)!;
+          if (value !== undefined) {
+            const { mockField: field, mockKey: key } = data as { mockField: string; mockKey: string };
+            write(id, { ...room, [field]: { ...(room[field] as Record<string, unknown> | undefined), [key]: value } });
+          } else {
+            write(id, { ...room, ...data });
+          }
+        },
       });
     },
     serverTimestamp: () => {
@@ -166,10 +177,12 @@ test('one player can start a rematch for everyone in the race', async () => {
   expect(document.getElementById(guestPassageId)).toHaveTextContent(paragraph);
 
   const guestInput = guestUI.getByRole('textbox') as HTMLTextAreaElement;
+  fireEvent.change(hostUI.getByRole('textbox'), { target: { value: paragraph.slice(0, 3) } });
   fireEvent.change(guestInput, { target: { value: paragraph.slice(0, 5) } });
   expect(guestUI.getByLabelText('Your live score')).toHaveTextContent('60 WPM100% accuracy');
   await act(async () => { jest.advanceTimersByTime(750); });
   expect(hostUI.getByText('5 correct of 5 typed')).toBeInTheDocument();
+  expect(guestUI.getByText('3 correct of 3 typed')).toBeInTheDocument();
   expect(hostUI.getByRole('progressbar', { name: 'Guest passage progress' })).toHaveAttribute('value', '5');
   const hostPassage = document.getElementById(hostPassageId)!;
   const letters = hostPassage.querySelectorAll('.passage-letter');
@@ -192,6 +205,8 @@ test('one player can start a rematch for everyone in the race', async () => {
   expect(guestUI.queryByRole('textbox')).toBeNull();
   expect(hostUI.getByText('8 WPM · 100% accuracy · 10 correct characters')).toBeInTheDocument();
   expect(guestUI.getByText('8 WPM · 100% accuracy · 10 correct characters')).toBeInTheDocument();
+  expect(hostUI.getByText('2 WPM · 100% accuracy · 3 correct characters')).toBeInTheDocument();
+  expect(guestUI.getByText('2 WPM · 100% accuracy · 3 correct characters')).toBeInTheDocument();
 
   await act(async () => { fireEvent.click(guestUI.getByRole('button', { name: 'Play again' })); });
   expect(hostUI.getByRole('timer')).toHaveTextContent('Starts in 3');
